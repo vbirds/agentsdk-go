@@ -47,12 +47,15 @@ func TestRuntimeBindsSubagentCompletionToHooksAndHistory(t *testing.T) {
 
 	rt := &Runtime{
 		opts:      Options{subMgr: mgr},
-		histories: newHistoryStore(4),
+		histories: newHistoryStore(4, nil),
 		hooks:     exec,
 	}
 	rt.bindSubagentCallbacks()
 
-	history := rt.histories.Get("sess")
+	history, err := rt.histories.Get("sess")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	history.Append(message.Message{Role: "user", Content: "start"})
 
 	taskID, err := mgr.DispatchAsync(subagents.WithContext(context.Background(), subagents.Context{SessionID: "sess"}), "worker", "inspect repo")
@@ -127,12 +130,15 @@ func TestRuntimeCanDisableSubagentSummaryInjection(t *testing.T) {
 
 	rt := &Runtime{
 		opts:      Options{DisableSubagentSummary: true, subMgr: mgr},
-		histories: newHistoryStore(4),
+		histories: newHistoryStore(4, nil),
 		hooks:     hooks.NewExecutor(),
 	}
 	rt.bindSubagentCallbacks()
 
-	history := rt.histories.Get("sess")
+	history, err := rt.histories.Get("sess")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	history.Append(message.Message{Role: "user", Content: "start"})
 
 	taskID, err := mgr.DispatchAsync(subagents.WithContext(context.Background(), subagents.Context{SessionID: "sess"}), "worker", "inspect repo")
