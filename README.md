@@ -30,7 +30,7 @@ Breaking changes for the v2 refactor are tracked in `docs/refactor/UPGRADING-v2.
 - **Thread-Safe Runtime**: Runtime guards mutable state with internal locks.
 - **Per-Session Mutual Exclusion**: Concurrent `Run`/`RunStream` calls on the same `SessionID` return `ErrConcurrentExecution` (callers can queue/retry if they want serialization).
 - **Shutdown**: `Runtime.Close()` waits for in-flight requests to complete.
-- **Validation**: run `go test -race ./...` after changes.
+- **Validation**: run `make check` before opening a PR; run `make race` for concurrency-sensitive changes.
 
 ### Examples
 - `examples/01-basic` - Minimal request/response
@@ -461,37 +461,57 @@ The response format follows the Anthropic Messages API and includes these event 
 ### Run Tests
 
 ```bash
-# All tests
-go test ./...
+# Full offline validation gate
+make check
 
-# Core module tests
-go test ./pkg/api/... ./pkg/middleware/... ./pkg/model/...
+# All tests only
+make test
 
-# Integration tests
-go test ./test/integration/...
+# Race detector
+make race
 
 # Generate coverage report
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out
+make coverage
 ```
 
 ### Coverage
 
-Coverage numbers change over time; generate a report with `go test -coverprofile=coverage.out ./...`.
+Coverage numbers change over time. The project target is 70% line coverage in report-only mode; generate the current report with `make coverage`.
 
 ## Build
 
 ### Makefile Commands
 
 ```bash
+# Run the full local gate: naming, format check, tidy check, lint, duplicate check, build, tests
+make check
+
+# Format Go files
+make fmt
+
+# Check formatting without modifying files
+make fmt-check
+
+# Check go.mod/go.sum are tidy
+make tidy-check
+
 # Run tests
 make test
 
-# Generate coverage report
-make coverage
+# Run race detector
+make race
 
 # Lint code
 make lint
+
+# Check code-canonicality naming rules
+make naming-check
+
+# Check duplicated code if dupl is installed
+make duplicate-check
+
+# Generate coverage report
+make coverage
 
 # Build CLI tool
 make agentctl

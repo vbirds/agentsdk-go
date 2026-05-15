@@ -45,7 +45,7 @@ v2 重构相关的不兼容变更与迁移清单见 `docs/refactor/UPGRADING-v2.
 - **线程安全 Runtime**：内部对可变状态加锁。
 - **会话互斥**：相同 `SessionID` 的并发 `Run`/`RunStream` 会返回 `ErrConcurrentExecution`（需要串行化时由调用方自行排队/重试）。
 - **关闭**：`Runtime.Close()` 等待所有进行中的请求完成。
-- **验证**：修改后运行 `go test -race ./...`。
+- **验证**：提交 PR 前运行 `make check`；并发敏感改动额外运行 `make race`。
 
 ## 系统架构
 
@@ -463,37 +463,57 @@ curl -N -X POST http://localhost:8080/v1/run/stream \
 ### 运行测试
 
 ```bash
-# 所有测试
-go test ./...
+# 完整离线验证门禁
+make check
 
-# 核心模块测试
-go test ./pkg/api/... ./pkg/middleware/... ./pkg/model/...
+# 仅运行所有测试
+make test
 
-# 集成测试
-go test ./test/integration/...
+# 运行 race detector
+make race
 
 # 生成覆盖率报告
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out
+make coverage
 ```
 
 ### 覆盖率
 
-覆盖率会随代码变化；请使用 `go test -coverprofile=coverage.out ./...` 生成报告。
+覆盖率会随代码变化。项目目标是 70% 行覆盖率，当前为 report-only 策略；请使用 `make coverage` 生成当前报告。
 
 ## 构建
 
 ### Makefile 命令
 
 ```bash
+# 运行完整本地门禁：命名、格式、tidy、lint、重复代码、构建、测试
+make check
+
+# 格式化 Go 文件
+make fmt
+
+# 只检查格式，不修改文件
+make fmt-check
+
+# 检查 go.mod/go.sum 是否 tidy
+make tidy-check
+
 # 运行测试
 make test
 
-# 生成覆盖率报告
-make coverage
+# 运行 race detector
+make race
 
 # 代码检查
 make lint
+
+# 检查 code-canonicality 命名规则
+make naming-check
+
+# 如已安装 dupl，则检查重复代码
+make duplicate-check
+
+# 生成覆盖率报告
+make coverage
 
 # 构建 CLI 工具
 make agentctl
