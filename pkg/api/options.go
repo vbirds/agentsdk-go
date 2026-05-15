@@ -8,7 +8,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -307,9 +306,6 @@ func (o Options) withDefaults() Options {
 
 	if o.MaxSessions <= 0 {
 		o.MaxSessions = defaultMaxSessions
-	}
-	if o.ToolConcurrency <= 0 {
-		o.ToolConcurrency = runtime.NumCPU()
 	}
 	if o.StopReinjectionLimit <= 0 {
 		o.StopReinjectionLimit = defaultStopReinjectionLimit

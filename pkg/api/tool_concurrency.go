@@ -17,35 +17,56 @@ type indexedToolCall struct {
 	call  model.ToolCall
 }
 
+type toolCallSegment struct {
+	concurrent bool
+	calls      []indexedToolCall
+}
+
 type toolExecution struct {
 	call      model.ToolCall
 	result    *tool.CallResult
 	err       error
 	beforeErr error
 	afterErr  error
+	started   bool
 }
 
-func partitionToolCalls(registry *tool.Registry, calls []model.ToolCall) ([]indexedToolCall, []indexedToolCall) {
-	var concurrent []indexedToolCall
-	var serial []indexedToolCall
-	for i, call := range calls {
-		if registry == nil {
-			serial = append(serial, indexedToolCall{index: i, call: call})
-			continue
-		}
-		impl, err := registry.Get(call.Name)
-		if err != nil {
-			serial = append(serial, indexedToolCall{index: i, call: call})
-			continue
-		}
-		meta := tool.MetadataOf(impl)
-		if meta.IsReadOnly && meta.IsConcurrencySafe {
-			concurrent = append(concurrent, indexedToolCall{index: i, call: call})
-			continue
-		}
-		serial = append(serial, indexedToolCall{index: i, call: call})
+func isConcurrentTool(registry *tool.Registry, call model.ToolCall) bool {
+	if registry == nil {
+		return false
 	}
-	return concurrent, serial
+	impl, err := registry.Get(call.Name)
+	if err != nil {
+		return false
+	}
+	meta := tool.MetadataOf(impl)
+	return meta.IsReadOnly && meta.IsConcurrencySafe
+}
+
+func partitionToolCallSegments(registry *tool.Registry, calls []model.ToolCall) []toolCallSegment {
+	var segments []toolCallSegment
+	var concurrent []indexedToolCall
+
+	flushConcurrent := func() {
+		if len(concurrent) == 0 {
+			return
+		}
+		segmentCalls := append([]indexedToolCall(nil), concurrent...)
+		segments = append(segments, toolCallSegment{concurrent: true, calls: segmentCalls})
+		concurrent = concurrent[:0]
+	}
+
+	for i, call := range calls {
+		item := indexedToolCall{index: i, call: call}
+		if isConcurrentTool(registry, call) {
+			concurrent = append(concurrent, item)
+			continue
+		}
+		flushConcurrent()
+		segments = append(segments, toolCallSegment{calls: []indexedToolCall{item}})
+	}
+	flushConcurrent()
+	return segments
 }
 
 func cloneMiddlewareState(base *middleware.State) *middleware.State {
@@ -69,7 +90,7 @@ func cloneMiddlewareState(base *middleware.State) *middleware.State {
 }
 
 func (rt *Runtime) executeSingleToolCall(ctx context.Context, call model.ToolCall, tools *runtimeToolExecutor, chain *middleware.Chain, baseState *middleware.State, tracer Tracer, agentSpan SpanContext, sessionID, requestID string) toolExecution {
-	exec := toolExecution{call: call}
+	exec := toolExecution{call: call, started: true}
 	state := cloneMiddlewareState(baseState)
 	state.ToolCall = call
 	if err := chain.Execute(ctx, middleware.StageBeforeTool, state); err != nil {
@@ -102,7 +123,10 @@ func (rt *Runtime) executeSingleToolCall(ctx context.Context, call model.ToolCal
 }
 
 func (rt *Runtime) executeToolCalls(ctx context.Context, calls []model.ToolCall, tools *runtimeToolExecutor, chain *middleware.Chain, baseState *middleware.State, tracer Tracer, agentSpan SpanContext, req Request) error {
-	concurrentCalls, serialCalls := partitionToolCalls(rt.registry, calls)
+	if len(calls) > 0 && tools == nil {
+		return errors.New("api: tool executor is nil")
+	}
+	segments := partitionToolCallSegments(rt.registry, calls)
 
 	var firstMiddlewareErr error
 	recordMiddlewareErr := func(exec toolExecution) {
@@ -114,31 +138,56 @@ func (rt *Runtime) executeToolCalls(ctx context.Context, calls []model.ToolCall,
 		}
 	}
 
-	if len(concurrentCalls) > 0 {
-		results := make([]toolExecution, len(concurrentCalls))
+	for _, segment := range segments {
+		if len(segment.calls) == 0 {
+			continue
+		}
+		if !segment.concurrent {
+			exec := rt.executeSingleToolCall(ctx, segment.calls[0].call, tools, chain, baseState, tracer, agentSpan, req.SessionID, req.RequestID)
+			recordMiddlewareErr(exec)
+			if exec.err != nil && (errors.Is(exec.err, context.Canceled) || errors.Is(exec.err, context.DeadlineExceeded)) {
+				return exec.err
+			}
+			continue
+		}
+
+		results := make([]toolExecution, len(segment.calls))
 		groupCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		limit := rt.opts.ToolConcurrency
-		if limit <= 0 {
-			limit = 1
+		var sem chan struct{}
+		if limit > 0 {
+			sem = make(chan struct{}, limit)
 		}
-		sem := make(chan struct{}, limit)
 		var wg sync.WaitGroup
-		errCh := make(chan error, len(concurrentCalls))
+		errCh := make(chan error, len(segment.calls))
 		concurrentExec := tools.withoutHistory()
-		for i, item := range concurrentCalls {
+		for i, item := range segment.calls {
 			i := i
 			item := item
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				select {
-				case sem <- struct{}{}:
-				case <-groupCtx.Done():
-					errCh <- groupCtx.Err()
+				if err := groupCtx.Err(); err != nil {
+					results[i] = toolExecution{call: item.call, err: err}
+					errCh <- err
 					return
 				}
-				defer func() { <-sem }()
+				if sem != nil {
+					select {
+					case sem <- struct{}{}:
+					case <-groupCtx.Done():
+						results[i] = toolExecution{call: item.call, err: groupCtx.Err()}
+						errCh <- groupCtx.Err()
+						return
+					}
+					defer func() { <-sem }()
+				}
+				if err := groupCtx.Err(); err != nil {
+					results[i] = toolExecution{call: item.call, err: err}
+					errCh <- err
+					return
+				}
 				results[i] = rt.executeSingleToolCall(groupCtx, item.call, concurrentExec, chain, baseState, tracer, agentSpan, req.SessionID, req.RequestID)
 				if results[i].err != nil && (errors.Is(results[i].err, context.Canceled) || errors.Is(results[i].err, context.DeadlineExceeded)) {
 					errCh <- results[i].err
@@ -158,18 +207,13 @@ func (rt *Runtime) executeToolCalls(ctx context.Context, calls []model.ToolCall,
 		}
 		for i, exec := range results {
 			recordMiddlewareErr(exec)
-			tools.appendCallResult(concurrentCalls[i].call, exec.result, exec.err)
+			if !exec.started && (errors.Is(exec.err, context.Canceled) || errors.Is(exec.err, context.DeadlineExceeded)) {
+				continue
+			}
+			tools.appendCallResult(segment.calls[i].call, exec.result, exec.err)
 		}
 		if groupErr != nil {
 			return groupErr
-		}
-	}
-
-	for _, item := range serialCalls {
-		exec := rt.executeSingleToolCall(ctx, item.call, tools, chain, baseState, tracer, agentSpan, req.SessionID, req.RequestID)
-		recordMiddlewareErr(exec)
-		if exec.err != nil && (errors.Is(exec.err, context.Canceled) || errors.Is(exec.err, context.DeadlineExceeded)) {
-			return exec.err
 		}
 	}
 
