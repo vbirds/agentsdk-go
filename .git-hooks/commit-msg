@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+msg_file="${1:?commit message file required}"
+subject="$(sed -n '1p' "$msg_file")"
+
+if ! printf '%s' "$subject" | grep -Eq '^(feat|fix|refactor|chore|docs|test|ci|build|perf)(\([a-z0-9._/-]+\))?!?: .{1,72}$'; then
+  cat <<'EOF'
+Commit message must use Conventional Commits:
+  type(scope): subject under 72 chars
+
+Allowed types: feat, fix, refactor, chore, docs, test, ci, build, perf
+Example: fix(api): reject empty session IDs
+EOF
+  exit 1
+fi

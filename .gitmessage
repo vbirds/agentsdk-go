@@ -1,0 +1,14 @@
+# <type>(<scope>): <subject>
+#
+# Allowed types: feat, fix, refactor, chore, docs, test, ci, build, perf
+# Scope: module / package name, e.g. api, model, tool, middleware, hooks, sandbox
+# Subject: under 72 chars, imperative mood, no trailing period
+#
+# Body (optional, wrap at 72): why this change, not what.
+# Reference issues with: Refs #123, Fixes #456.
+#
+# Breaking change marker:
+# BREAKING CHANGE: describe the incompatible public API change.
+#
+# Agent co-authorship:
+# Co-authored-by: Agent Name <agent@example.org>

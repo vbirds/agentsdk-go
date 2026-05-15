@@ -10,7 +10,40 @@ permissions:
   contents: read
 
 jobs:
+  fast-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+
+      - name: Naming guard
+        run: make naming-check
+
+      - name: Format
+        run: make fmt-check
+
+      - name: Tidy check
+        run: make tidy-check
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: v1.64.2
+          args: --timeout=5m
+
+      - name: Duplicate code check
+        run: |
+          go install github.com/mibk/dupl@latest
+          make duplicate-check
+
   test:
+    needs: fast-checks
     strategy:
       fail-fast: false
       matrix:
@@ -29,10 +62,15 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Test
+        run: go test ./...
+
       - name: Test (race)
+        if: matrix.os == 'ubuntu-latest'
         run: go test -race ./...
 
-  lint-and-coverage:
+  coverage:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -43,12 +81,6 @@ jobs:
         with:
           go-version: '1.24'
           check-latest: true
-
-      - name: Lint
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: v1.64.2
-          args: --timeout=5m
 
       - name: Coverage
         run: make coverage
